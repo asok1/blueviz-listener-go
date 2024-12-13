@@ -37,7 +37,7 @@ func main() {
 		seenSeqs: make(map[int64]struct{}),
 	}
 
-	scheduler := parallel.NewScheduler(5, "jetstream_localdev", logger, h.HandleEvent)
+	scheduler := parallel.NewScheduler(10, "jetstream_localdev", logger, h.HandleEvent)
 
 	c, err := client.NewClient(config, logger, scheduler)
 	if err != nil {
