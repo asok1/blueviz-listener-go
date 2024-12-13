@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bluesky-social/jetstream/pkg/client/schedulers/parallel"
 	"log"
 	"log/slog"
 	"os"
@@ -11,7 +12,6 @@ import (
 
 	apibsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/jetstream/pkg/client"
-	"github.com/bluesky-social/jetstream/pkg/client/schedulers/sequential"
 	"github.com/bluesky-social/jetstream/pkg/models"
 )
 
@@ -22,6 +22,7 @@ const (
 func main() {
 
 	ctx := context.Background()
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level:     slog.LevelInfo,
 		AddSource: true,
@@ -36,7 +37,7 @@ func main() {
 		seenSeqs: make(map[int64]struct{}),
 	}
 
-	scheduler := sequential.NewScheduler("jetstream_localdev", logger, h.HandleEvent)
+	scheduler := parallel.NewScheduler(5, "jetstream_localdev", logger, h.HandleEvent)
 
 	c, err := client.NewClient(config, logger, scheduler)
 	if err != nil {
@@ -85,7 +86,7 @@ func (h *handler) HandleEvent(ctx context.Context, event *models.Event) error {
 
 			err := handleSavePost(os.Getenv("dbPassword"), post.CreatedAt, event.Did, event.Kind, event.Commit.Collection, event.Commit.Operation, event.Commit.CID, event.Commit.Record)
 			if err != nil {
-				return fmt.Errorf("failed to save post: %w", err)
+				return fmt.Errorf("failed to save post: %s", err)
 			}
 			fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Text)
 			//case "app.bsky.feed.like":
