@@ -2,134 +2,109 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/bluesky-social/jetstream/pkg/client/schedulers/parallel"
+	"github.com/goccy/go-json"
+	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
-	"log/slog"
+	"net/url"
 	"os"
-	"time"
-
-	apibsky "github.com/bluesky-social/indigo/api/bsky"
-	"github.com/bluesky-social/jetstream/pkg/client"
-	"github.com/bluesky-social/jetstream/pkg/models"
 )
 
 const (
 	serverAddr = "wss://jetstream.atproto.tools/subscribe"
 )
 
-func main() {
+var CNX = Connection()
 
-	ctx := context.Background()
+func Connection() *mongo.Client {
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level:     slog.LevelInfo,
-		AddSource: true,
-	})))
-	logger := slog.Default()
+	// Use the SetServerAPIOptions() method to set the version of the Stable API on the client
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	mongoUser := os.Getenv("dbUser")
+	mongoPassword := os.Getenv("dbPassword")
+	// Set client options
+	clientOptions := options.Client().ApplyURI("mongodb+srv://" + mongoUser + ":" + mongoPassword + "@activity-dev.x8bis.mongodb.net/?retryWrites=true&w=majority&appName=activity-dev").SetServerAPIOptions(serverAPI)
 
-	config := client.DefaultClientConfig()
-	config.WebsocketURL = serverAddr
-	config.Compress = true
+	// Connect to MongoDB
+	client, err := mongo.Connect(context.TODO(), clientOptions)
 
-	h := &handler{
-		seenSeqs: make(map[int64]struct{}),
-	}
-
-	scheduler := parallel.NewScheduler(50, "jetstream_localdev", logger, h.HandleEvent)
-
-	c, err := client.NewClient(config, logger, scheduler)
 	if err != nil {
-		log.Fatalf("failed to create client: %v", err)
+		log.Fatal(err)
 	}
 
-	cursor := time.Now().Add(5 * -time.Minute).UnixMicro()
+	// Check the connection
+	err = client.Ping(context.TODO(), nil)
 
-	// Every 5 seconds print the events read and bytes read and average event size
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		for {
-			select {
-			case <-ticker.C:
-				eventsRead := c.EventsRead.Load()
-				bytesRead := c.BytesRead.Load()
-				avgEventSize := bytesRead / eventsRead
-				logger.Info("stats", "events_read", eventsRead, "bytes_read", bytesRead, "avg_event_size", avgEventSize)
-			}
-		}
-	}()
-
-	if err := c.ConnectAndRead(ctx, &cursor); err != nil {
-		log.Fatalf("failed to connect: %v", err)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	slog.Info("shutdown")
+	fmt.Println("Connected to MongoDB!")
+
+	return client
 }
 
-type handler struct {
-	seenSeqs  map[int64]struct{}
-	highwater int64
-}
-
-func (h *handler) HandleEvent(ctx context.Context, event *models.Event) error {
-	// Unmarshal the record if there is one
-	if event.Commit != nil && (event.Commit.Operation == models.CommitOperationCreate || event.Commit.Operation == models.CommitOperationUpdate) {
-		switch event.Commit.Collection {
-		case "app.bsky.feed.post":
-			var post apibsky.FeedPost
-			if err := json.Unmarshal(event.Commit.Record, &post); err != nil {
-				return fmt.Errorf("failed to unmarshal post: %w", err)
-			} else {
-				log.Print(post)
-			}
-
-			err := handleSavePost(os.Getenv("dbPassword"), post.CreatedAt, event.Did, event.Kind, event.Commit.Collection, event.Commit.Operation, event.Commit.CID, event.Commit.Record)
-			if err != nil {
-				return fmt.Errorf("failed to save post: %s", err)
-			}
-			fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Text)
-			//case "app.bsky.feed.like":
-			//	var like apibsky.FeedLike
-			//	if err := json.Unmarshal(event.Commit.Record, &like); err != nil {
-			//		return fmt.Errorf("failed to unmarshal like: %w", err)
-			//	}
-			//	fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, like.Subject)
-			//case "app.bsky.feed.repost":
-			//	var post apibsky.FeedRepost
-			//	if err := json.Unmarshal(event.Commit.Record, &post); err != nil {
-			//		return fmt.Errorf("failed to unmarshal post: %w", err)
-			//	}
-			//	fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Subject)
-			//case "app.bsky.graph.follow":
-			//	var post apibsky.GraphFollow
-			//	if err := json.Unmarshal(event.Commit.Record, &post); err != nil {
-			//		return fmt.Errorf("failed to unmarshal post: %w", err)
-			//	}
-			//	fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Subject)
-			//case "app.bsky.actor.profile":
-			//	var post apibsky.ActorProfile
-			//	if err := json.Unmarshal(event.Commit.Record, &post); err != nil {
-			//		return fmt.Errorf("failed to unmarshal post: %w", err)
-			//	}
-			//	fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Description)
-			//case "app.bsky.graph.block":
-			//	var post apibsky.GraphBlock
-			//	if err := json.Unmarshal(event.Commit.Record, &post); err != nil {
-			//		return fmt.Errorf("failed to unmarshal post: %w", err)
-			//	}
-			//	fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Subject)
-			//case "app.bsky.graph.listitem":
-			//	var post apibsky.GraphListitem
-			//	if err := json.Unmarshal(event.Commit.Record, &post); err != nil {
-			//		return fmt.Errorf("failed to unmarshal post: %w", err)
-			//	}
-			//	fmt.Printf("%v |(%s)| %s\n", time.UnixMicro(event.TimeUS).Local().Format("15:04:05"), event.Did, post.Subject)
-			//default:
-			//	log.Print("failed to unmarshal post: %w of type %w", event, event.Commit.Collection)
-		}
-
+func saveActivity(activityJson string, collection *mongo.Collection) {
+	var bsonDoc bson.M
+	err := json.Unmarshal([]byte(activityJson), &bsonDoc)
+	if err != nil {
+		log.Fatal("failed to unmarshal JSON: %s", err)
 	}
 
-	return nil
+	_, err = collection.InsertOne(context.TODO(), bsonDoc)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+}
+func main() {
+	collection := CNX.Database("blueviz-dev").Collection("activity")
+
+	//WEBSOCKET
+	wsURL := "wss://jetstream2.us-east.bsky.network/subscribe"
+
+	// Construct query parameters
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		log.Fatalf("failed to parse WebSocket URL: %v", err)
+	}
+	q := u.Query()
+	q.Set("wantedCollections", "app.bsky.feed.post")
+	u.RawQuery = q.Encode()
+
+	// WebSocket dialer
+	dialer := websocket.DefaultDialer
+
+	// Add authorization header
+	headers := map[string][]string{
+		//"Authorization": {"Bearer YOUR_ACCESS_TOKEN"},
+	}
+
+	// Connect to the WebSocket server
+	conn, _, err := dialer.Dial(u.String(), headers)
+	if err != nil {
+		log.Fatalf("failed to connect to WebSocket: %v", err)
+	}
+	defer conn.Close()
+
+	log.Println("Connected to WebSocket server")
+
+	// Listen for messages
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("error reading message: %v", err)
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				log.Println("Connection closed normally")
+				break
+			}
+			log.Println("Reconnecting...")
+			return
+		}
+		log.Printf("Received message: %s", string(msg))
+		saveActivity(string(msg), collection)
+	}
 }
