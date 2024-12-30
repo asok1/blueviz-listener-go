@@ -73,15 +73,15 @@ func main() {
 	}
 	q := u.Query()
 	q.Set("wantedCollections", "app.bsky.feed.post")
+	q.Set("wantedCollections", "app.bsky.feed.like")
+	q.Set("wantedCollections", "app.bsky.graph.follow")
 	u.RawQuery = q.Encode()
 
 	// WebSocket dialer
 	dialer := websocket.DefaultDialer
 
 	// Add authorization header
-	headers := map[string][]string{
-		//"Authorization": {"Bearer YOUR_ACCESS_TOKEN"},
-	}
+	headers := map[string][]string{}
 
 	// Connect to the WebSocket server
 	conn, _, err := dialer.Dial(u.String(), headers)
@@ -101,8 +101,8 @@ func main() {
 				log.Println("Connection closed normally")
 				break
 			}
-			log.Println("Reconnecting...")
-			return
+			//log.Println("Reconnecting...")
+			//return
 		}
 		log.Printf("Received message: %s", string(msg))
 		saveActivity(string(msg), collection)
